@@ -1,23 +1,9 @@
-/**
- * ChatGPTプロンプト管理システム - プロンプト収集ブックマークレット
- * 
- * 機能:
- * - ChatGPTのプロンプトと回答を抽出
- * - ローカルストレージに保存
- * - 保存成功時に通知を表示
- */
-
-javascript:(function() {
-  // 定数定義
+javascript:(function(){
   const STORAGE_KEY = 'chatgpt_prompts';
   const MAX_PROMPTS = 100;
-  const DEBUG_MODE = true; // デバッグモード
-  
-  // ユーティリティ関数
   function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    return Date.now().toString(36) + Math.random().toString(36).substr(2,5);
   }
-  
   function showNotification(message, isSuccess = true) {
     const notification = document.createElement('div');
     notification.textContent = message;
@@ -31,9 +17,7 @@ javascript:(function() {
     notification.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
     notification.style.zIndex = '10000';
     notification.style.transition = 'opacity 0.5s';
-    
     document.body.appendChild(notification);
-    
     setTimeout(() => {
       notification.style.opacity = '0';
       setTimeout(() => {
@@ -41,159 +25,78 @@ javascript:(function() {
       }, 500);
     }, 3000);
   }
-  
-  // デバッグ情報を表示する関数
-  function debugLog(message, data = null) {
-    if (!DEBUG_MODE) return;
-    
-    console.log(`[ChatGPT Prompt Manager] ${message}`);
-    if (data) console.log(data);
-  }
-  
-  // プロンプトとレスポンスの抽出
   function extractConversation() {
     try {
-      debugLog('DOM構造の解析を開始');
-      
-      // 複数のセレクタを試す
-      const possibleSelectors = [
-        // 新しいChatGPTインターフェースのセレクタ
-        {
-          container: 'div[data-testid="conversation-turn-"]',
-          roleAttr: 'data-message-author-role',
-          contentClass: '.markdown'
-        },
-        {
-          container: 'div[data-testid="conversation-turn"]',
-          roleAttr: 'data-message-author-role',
-          contentClass: '.markdown'
-        },
-        {
-          container: '.chat-message',
-          roleClass: {
-            user: '.chat-message-user',
-            assistant: '.chat-message-assistant'
-          },
-          contentClass: '.prose'
-        },
-        {
-          container: '.group',
-          roleClass: {
-            user: '.whitespace-pre-wrap',
-            assistant: '.markdown'
+      let threadContainer = document.querySelector('[data-testid="conversation-turn-list"]');
+      if (!threadContainer) {
+        threadContainer = document.querySelector('main');
+      }
+      if (!threadContainer) {
+        throw new Error('会話コンテナが見つかりません。ChatGPTのページで実行してください。');
+      }
+      // threadContainer 内、または全体からユーザー・アシスタントの発言要素を取得
+      let conversationTurns = threadContainer.querySelectorAll('[data-message-author-role]');
+      if (conversationTurns.length < 1) {
+        conversationTurns = document.querySelectorAll('[data-message-author-role]');
+      }
+      if (conversationTurns.length < 1) {
+        throw new Error('会話が見つかりません。少なくとも1つの質問と回答が必要です。');
+      }
+      const conversations = [];
+      for (let i = 0; i < conversationTurns.length; i++) {
+        const turn = conversationTurns[i];
+        let roleElem = turn.querySelector('[data-message-author-role]');
+        if (!roleElem && turn.hasAttribute('data-message-author-role')) {
+          roleElem = turn;
+        }
+        if (!roleElem) continue;
+        const role = roleElem.getAttribute('data-message-author-role');
+        let contentElem = turn.querySelector('[data-message-content-source]') ||
+                          turn.querySelector('[data-message-content]') ||
+                          turn.querySelector('div.markdown');
+        if (!contentElem) {
+          const text = turn.innerText.trim();
+          if (text) {
+            contentElem = { textContent: text };
+          } else {
+            continue;
           }
         }
-      ];
-      
-      // 各セレクタを試してみる
-      for (const selector of possibleSelectors) {
-        const elements = document.querySelectorAll(selector.container);
-        debugLog(`セレクタ ${selector.container} で ${elements.length} 個の要素を検出`);
-        
-        if (elements && elements.length > 0) {
-          const result = processConversationElements(elements, selector);
-          if (result && result.length > 0) {
-            debugLog('会話の抽出に成功', result);
-            return result;
+        const content = contentElem.textContent.trim();
+        if (role === 'user') {
+          let assistantContent = '';
+          // 後続ターンから最初のアシスタント発言を探索
+          for (let j = i + 1; j < conversationTurns.length; j++) {
+            const nextTurn = conversationTurns[j];
+            let nextRoleElem = nextTurn.querySelector('[data-message-author-role]') ||
+                               (nextTurn.hasAttribute('data-message-author-role') ? nextTurn : null);
+            if (nextRoleElem) {
+              const nextRole = nextRoleElem.getAttribute('data-message-author-role');
+              if (nextRole === 'assistant') {
+                let nextContentElem = nextTurn.querySelector('[data-message-content-source]') ||
+                                      nextTurn.querySelector('[data-message-content]') ||
+                                      nextTurn.querySelector('div.markdown');
+                if (nextContentElem) {
+                  assistantContent = nextContentElem.textContent.trim();
+                }
+                break;
+              }
+            }
           }
+          conversations.push({ prompt: content, response: assistantContent });
         }
       }
-      
-      // DOM構造をデバッグ用に出力
-      if (DEBUG_MODE) {
-        debugLog('現在のDOM構造', {
-          body: document.body.innerHTML.substring(0, 500) + '...',
-          mainElement: document.querySelector('main')?.outerHTML.substring(0, 500) + '...'
-        });
-      }
-      
-      throw new Error('会話コンテナが見つかりません。ChatGPTのページで実行してください。');
+      console.log('抽出された会話:', conversations);
+      return conversations;
     } catch (error) {
-      debugLog('エラー発生', error);
+      console.error('抽出エラー:', error);
       showNotification('エラー: ' + error.message, false);
       return null;
     }
   }
-  
-  // 会話要素を処理する関数
-  function processConversationElements(elements, selector) {
-    const conversations = [];
-    let currentPrompt = '';
-    let currentResponse = '';
-    
-    debugLog(`${elements.length}個の会話要素を処理中`);
-    
-    for (let i = 0; i < elements.length; i++) {
-      const element = elements[i];
-      let role = null;
-      let contentElement = null;
-      
-      // 役割（ユーザーかアシスタントか）を特定
-      if (selector.roleAttr) {
-        role = element.getAttribute(selector.roleAttr);
-        debugLog(`役割属性 ${selector.roleAttr} から ${role} を検出`);
-      } else if (selector.roleClass) {
-        if (element.matches(selector.roleClass.user)) {
-          role = 'user';
-        } else if (element.matches(selector.roleClass.assistant)) {
-          role = 'assistant';
-        } else if (element.querySelector(selector.roleClass.user)) {
-          role = 'user';
-        } else if (element.querySelector(selector.roleClass.assistant)) {
-          role = 'assistant';
-        }
-        debugLog(`クラスから役割 ${role} を検出`);
-      }
-      
-      // コンテンツ要素を特定
-      if (selector.contentClass) {
-        contentElement = element.querySelector(selector.contentClass);
-        if (!contentElement && role === 'user') {
-          // ユーザーメッセージの場合、要素自体がコンテンツかもしれない
-          contentElement = element;
-        }
-      }
-      
-      if (!contentElement) {
-        debugLog(`要素 ${i} のコンテンツが見つかりません`, element.outerHTML);
-        continue;
-      }
-      
-      const text = contentElement.textContent.trim();
-      debugLog(`テキスト抽出: ${text.substring(0, 50)}...`);
-      
-      if (role === 'user') {
-        // ユーザーメッセージ（プロンプト）
-        currentPrompt = text;
-      } else if (role === 'assistant') {
-        // AIメッセージ（レスポンス）
-        currentResponse = text;
-        
-        // プロンプトとレスポンスのペアを保存
-        if (currentPrompt) {
-          conversations.push({
-            prompt: currentPrompt,
-            response: currentResponse
-          });
-          debugLog('会話ペアを追加', { prompt: currentPrompt.substring(0, 50) + '...', response: currentResponse.substring(0, 50) + '...' });
-        }
-        
-        // 変数をリセット
-        currentPrompt = '';
-        currentResponse = '';
-      }
-    }
-    
-    return conversations;
-  }
-  
-  // ローカルストレージにプロンプトを保存
   function saveToLocalStorage(conversations) {
     try {
-      // 既存のプロンプトを取得
       let storedPrompts = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-      
-      // 新しいプロンプトを追加
       const newPrompts = conversations.map(conv => ({
         id: generateId(),
         prompt: conv.prompt,
@@ -203,47 +106,30 @@ javascript:(function() {
         feedback: '',
         category: 'デフォルト'
       }));
-      
-      // 既存のプロンプトと新しいプロンプトを結合
       storedPrompts = [...newPrompts, ...storedPrompts];
-      
-      // 上限を超えた場合は古いプロンプトを削除
       if (storedPrompts.length > MAX_PROMPTS) {
         storedPrompts = storedPrompts.slice(0, MAX_PROMPTS);
       }
-      
-      // ローカルストレージに保存
       localStorage.setItem(STORAGE_KEY, JSON.stringify(storedPrompts));
-      
       return newPrompts.length;
     } catch (error) {
+      console.error('保存エラー:', error);
       showNotification('保存エラー: ' + error.message, false);
       return 0;
     }
   }
-  
-  // メイン処理
   function main() {
-    debugLog('ブックマークレット実行開始');
-    
-    // 会話を抽出
     const conversations = extractConversation();
-    
     if (!conversations || conversations.length === 0) {
       showNotification('保存するプロンプトが見つかりませんでした。', false);
       return;
     }
-    
-    // ローカルストレージに保存
     const savedCount = saveToLocalStorage(conversations);
-    
     if (savedCount > 0) {
-      showNotification(`${savedCount}件のプロンプトを保存しました。`);
+      showNotification(savedCount + '件のプロンプトを保存しました。');
     } else {
       showNotification('プロンプトの保存に失敗しました。', false);
     }
   }
-  
-  // 実行
   main();
 })();
