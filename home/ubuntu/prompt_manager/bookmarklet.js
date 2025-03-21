@@ -11,6 +11,7 @@ javascript:(function() {
   // 定数定義
   const STORAGE_KEY = 'chatgpt_prompts';
   const MAX_PROMPTS = 100;
+  const DEBUG_MODE = true; // デバッグモード
   
   // ユーティリティ関数
   function generateId() {
@@ -41,46 +42,125 @@ javascript:(function() {
     }, 3000);
   }
   
+  // デバッグ情報を表示する関数
+  function debugLog(message, data = null) {
+    if (!DEBUG_MODE) return;
+    
+    console.log(`[ChatGPT Prompt Manager] ${message}`);
+    if (data) console.log(data);
+  }
+  
   // プロンプトとレスポンスの抽出
   function extractConversation() {
     try {
-      // 現在のChatGPTのDOMに対応した会話要素の取得
-      // 2023年以降の新しいChatGPTインターフェース用のセレクタ
-      const messageElements = document.querySelectorAll('[data-message-author-role]');
+      debugLog('DOM構造の解析を開始');
       
-      if (!messageElements || messageElements.length === 0) {
-        // 旧インターフェースのセレクタを試す
-        const conversationContainer = document.querySelector('main > div.flex-1 > div.h-full > div > div');
-        
-        if (!conversationContainer) {
-          throw new Error('会話コンテナが見つかりません。ChatGPTのページで実行してください。');
+      // 複数のセレクタを試す
+      const possibleSelectors = [
+        // 新しいChatGPTインターフェースのセレクタ
+        {
+          container: 'div[data-testid="conversation-turn-"]',
+          roleAttr: 'data-message-author-role',
+          contentClass: '.markdown'
+        },
+        {
+          container: 'div[data-testid="conversation-turn"]',
+          roleAttr: 'data-message-author-role',
+          contentClass: '.markdown'
+        },
+        {
+          container: '.chat-message',
+          roleClass: {
+            user: '.chat-message-user',
+            assistant: '.chat-message-assistant'
+          },
+          contentClass: '.prose'
+        },
+        {
+          container: '.group',
+          roleClass: {
+            user: '.whitespace-pre-wrap',
+            assistant: '.markdown'
+          }
         }
+      ];
+      
+      // 各セレクタを試してみる
+      for (const selector of possibleSelectors) {
+        const elements = document.querySelectorAll(selector.container);
+        debugLog(`セレクタ ${selector.container} で ${elements.length} 個の要素を検出`);
         
-        return extractConversationOldUI(conversationContainer);
+        if (elements && elements.length > 0) {
+          const result = processConversationElements(elements, selector);
+          if (result && result.length > 0) {
+            debugLog('会話の抽出に成功', result);
+            return result;
+          }
+        }
       }
       
-      // 新UIからの会話抽出
-      return extractConversationNewUI(messageElements);
+      // DOM構造をデバッグ用に出力
+      if (DEBUG_MODE) {
+        debugLog('現在のDOM構造', {
+          body: document.body.innerHTML.substring(0, 500) + '...',
+          mainElement: document.querySelector('main')?.outerHTML.substring(0, 500) + '...'
+        });
+      }
+      
+      throw new Error('会話コンテナが見つかりません。ChatGPTのページで実行してください。');
     } catch (error) {
+      debugLog('エラー発生', error);
       showNotification('エラー: ' + error.message, false);
       return null;
     }
   }
   
-  // 新しいChatGPTインターフェースからの会話抽出
-  function extractConversationNewUI(messageElements) {
+  // 会話要素を処理する関数
+  function processConversationElements(elements, selector) {
     const conversations = [];
     let currentPrompt = '';
     let currentResponse = '';
     
-    for (let i = 0; i < messageElements.length; i++) {
-      const element = messageElements[i];
-      const role = element.getAttribute('data-message-author-role');
-      const contentElement = element.querySelector('.markdown');
+    debugLog(`${elements.length}個の会話要素を処理中`);
+    
+    for (let i = 0; i < elements.length; i++) {
+      const element = elements[i];
+      let role = null;
+      let contentElement = null;
       
-      if (!contentElement) continue;
+      // 役割（ユーザーかアシスタントか）を特定
+      if (selector.roleAttr) {
+        role = element.getAttribute(selector.roleAttr);
+        debugLog(`役割属性 ${selector.roleAttr} から ${role} を検出`);
+      } else if (selector.roleClass) {
+        if (element.matches(selector.roleClass.user)) {
+          role = 'user';
+        } else if (element.matches(selector.roleClass.assistant)) {
+          role = 'assistant';
+        } else if (element.querySelector(selector.roleClass.user)) {
+          role = 'user';
+        } else if (element.querySelector(selector.roleClass.assistant)) {
+          role = 'assistant';
+        }
+        debugLog(`クラスから役割 ${role} を検出`);
+      }
+      
+      // コンテンツ要素を特定
+      if (selector.contentClass) {
+        contentElement = element.querySelector(selector.contentClass);
+        if (!contentElement && role === 'user') {
+          // ユーザーメッセージの場合、要素自体がコンテンツかもしれない
+          contentElement = element;
+        }
+      }
+      
+      if (!contentElement) {
+        debugLog(`要素 ${i} のコンテンツが見つかりません`, element.outerHTML);
+        continue;
+      }
       
       const text = contentElement.textContent.trim();
+      debugLog(`テキスト抽出: ${text.substring(0, 50)}...`);
       
       if (role === 'user') {
         // ユーザーメッセージ（プロンプト）
@@ -95,46 +175,7 @@ javascript:(function() {
             prompt: currentPrompt,
             response: currentResponse
           });
-        }
-        
-        // 変数をリセット
-        currentPrompt = '';
-        currentResponse = '';
-      }
-    }
-    
-    return conversations;
-  }
-  
-  // 旧UIからの会話抽出
-  function extractConversationOldUI(conversationContainer) {
-    const conversationElements = conversationContainer.children;
-    
-    if (conversationElements.length < 3) {
-      throw new Error('会話が見つかりません。少なくとも1つの質問と回答が必要です。');
-    }
-    
-    // 会話を抽出（最初の要素はモデル情報、最後の要素は入力欄なので除外）
-    const conversations = [];
-    let currentPrompt = '';
-    let currentResponse = '';
-    
-    for (let i = 1; i < conversationElements.length - 1; i++) {
-      const element = conversationElements[i];
-      const text = element.textContent.trim();
-      
-      // 偶数インデックスはユーザープロンプト、奇数インデックスはAI応答
-      if (i % 2 === 1) {
-        currentPrompt = text;
-      } else {
-        currentResponse = text;
-        
-        // プロンプトとレスポンスのペアを保存
-        if (currentPrompt) {
-          conversations.push({
-            prompt: currentPrompt,
-            response: currentResponse
-          });
+          debugLog('会話ペアを追加', { prompt: currentPrompt.substring(0, 50) + '...', response: currentResponse.substring(0, 50) + '...' });
         }
         
         // 変数をリセット
@@ -183,6 +224,8 @@ javascript:(function() {
   
   // メイン処理
   function main() {
+    debugLog('ブックマークレット実行開始');
+    
     // 会話を抽出
     const conversations = extractConversation();
     
