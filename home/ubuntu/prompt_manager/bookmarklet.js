@@ -44,53 +44,106 @@ javascript:(function() {
   // プロンプトとレスポンスの抽出
   function extractConversation() {
     try {
-      // ChatGPTの会話コンテナを取得
-      const conversationContainer = document.querySelector('main > div.flex-1 > div.h-full > div > div');
+      // 現在のChatGPTのDOMに対応した会話要素の取得
+      // 2023年以降の新しいChatGPTインターフェース用のセレクタ
+      const messageElements = document.querySelectorAll('[data-message-author-role]');
       
-      if (!conversationContainer) {
-        throw new Error('会話コンテナが見つかりません。ChatGPTのページで実行してください。');
-      }
-      
-      const conversationElements = conversationContainer.children;
-      
-      if (conversationElements.length < 3) {
-        throw new Error('会話が見つかりません。少なくとも1つの質問と回答が必要です。');
-      }
-      
-      // 会話を抽出（最初の要素はモデル情報、最後の要素は入力欄なので除外）
-      const conversations = [];
-      let currentPrompt = '';
-      let currentResponse = '';
-      
-      for (let i = 1; i < conversationElements.length - 1; i++) {
-        const element = conversationElements[i];
-        const text = element.textContent.trim();
+      if (!messageElements || messageElements.length === 0) {
+        // 旧インターフェースのセレクタを試す
+        const conversationContainer = document.querySelector('main > div.flex-1 > div.h-full > div > div');
         
-        // 偶数インデックスはユーザープロンプト、奇数インデックスはAI応答
-        if (i % 2 === 1) {
-          currentPrompt = text;
-        } else {
-          currentResponse = text;
-          
-          // プロンプトとレスポンスのペアを保存
-          if (currentPrompt) {
-            conversations.push({
-              prompt: currentPrompt,
-              response: currentResponse
-            });
-          }
-          
-          // 変数をリセット
-          currentPrompt = '';
-          currentResponse = '';
+        if (!conversationContainer) {
+          throw new Error('会話コンテナが見つかりません。ChatGPTのページで実行してください。');
         }
+        
+        return extractConversationOldUI(conversationContainer);
       }
       
-      return conversations;
+      // 新UIからの会話抽出
+      return extractConversationNewUI(messageElements);
     } catch (error) {
       showNotification('エラー: ' + error.message, false);
       return null;
     }
+  }
+  
+  // 新しいChatGPTインターフェースからの会話抽出
+  function extractConversationNewUI(messageElements) {
+    const conversations = [];
+    let currentPrompt = '';
+    let currentResponse = '';
+    
+    for (let i = 0; i < messageElements.length; i++) {
+      const element = messageElements[i];
+      const role = element.getAttribute('data-message-author-role');
+      const contentElement = element.querySelector('.markdown');
+      
+      if (!contentElement) continue;
+      
+      const text = contentElement.textContent.trim();
+      
+      if (role === 'user') {
+        // ユーザーメッセージ（プロンプト）
+        currentPrompt = text;
+      } else if (role === 'assistant') {
+        // AIメッセージ（レスポンス）
+        currentResponse = text;
+        
+        // プロンプトとレスポンスのペアを保存
+        if (currentPrompt) {
+          conversations.push({
+            prompt: currentPrompt,
+            response: currentResponse
+          });
+        }
+        
+        // 変数をリセット
+        currentPrompt = '';
+        currentResponse = '';
+      }
+    }
+    
+    return conversations;
+  }
+  
+  // 旧UIからの会話抽出
+  function extractConversationOldUI(conversationContainer) {
+    const conversationElements = conversationContainer.children;
+    
+    if (conversationElements.length < 3) {
+      throw new Error('会話が見つかりません。少なくとも1つの質問と回答が必要です。');
+    }
+    
+    // 会話を抽出（最初の要素はモデル情報、最後の要素は入力欄なので除外）
+    const conversations = [];
+    let currentPrompt = '';
+    let currentResponse = '';
+    
+    for (let i = 1; i < conversationElements.length - 1; i++) {
+      const element = conversationElements[i];
+      const text = element.textContent.trim();
+      
+      // 偶数インデックスはユーザープロンプト、奇数インデックスはAI応答
+      if (i % 2 === 1) {
+        currentPrompt = text;
+      } else {
+        currentResponse = text;
+        
+        // プロンプトとレスポンスのペアを保存
+        if (currentPrompt) {
+          conversations.push({
+            prompt: currentPrompt,
+            response: currentResponse
+          });
+        }
+        
+        // 変数をリセット
+        currentPrompt = '';
+        currentResponse = '';
+      }
+    }
+    
+    return conversations;
   }
   
   // ローカルストレージにプロンプトを保存
